@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelCostSeries } from "@/components/usage/modelCostSeries";
+import { buildModelTrendSeries } from "@/components/usage/modelTrendSeries";
 import {
   buildUsageTrendChartData,
   createUsageTrendTokenTickFormatter,
@@ -249,27 +249,51 @@ describe("hitRateAxisFloor", () => {
   });
 });
 
-describe("buildModelCostSeries", () => {
-  it("keeps each model's color across expense rank and filter changes", () => {
-    const color = (models: Record<string, number>, name: string) =>
-      buildModelCostSeries([{ xKey: "day", modelCosts: models }]).find(
-        ({ model }) => model === name,
-      )?.color;
-    const original = color({ a: 1, b: 2 }, "a");
-    expect(original).toBeDefined();
-    expect(color({ a: 3, b: 2 }, "a")).toBe(original);
-    expect(color({ a: 1 }, "a")).toBe(original);
-    expect(color({ a: 1, b: 2 }, "b")).not.toBe(original);
+describe("buildModelTrendSeries", () => {
+  const withMetric = (
+    values: Record<string, number>,
+    metric: Parameters<typeof buildModelTrendSeries>[1] = "cost",
+  ) =>
+    Object.fromEntries(
+      Object.entries(values).map(([model, value]) => [
+        model,
+        { cost: 0, requests: 0, tokens: 0, [metric]: value },
+      ]),
+    );
+
+  it("gives visible models distinct colors even when their IDs hash to the same slot", () => {
+    const colors = (values: Record<string, number>) =>
+      Object.fromEntries(
+        buildModelTrendSeries(
+          [{ xKey: "day", modelStats: withMetric(values) }],
+          "cost",
+        ).map(({ key, color }) => [key, color]),
+      );
+    // "a" and "i" share a preferred slot. "b" keeps its own preferred color.
+    const initial = colors({ a: 3, b: 2, i: 1 });
+    expect(new Set(Object.values(initial)).size).toBe(3);
+    expect(colors({ a: 1, b: 2, i: 3 })).toEqual(initial);
+    expect(initial["model:b"]).toBe(colors({ b: 1 })["model:b"]);
   });
 
-  it("keeps eight models and preserves each bucket sum in Other", () => {
-    const points: Parameters<typeof buildModelCostSeries>[0] = [
-      { xKey: "first", modelCosts: { a: 8, b: 7, c: 6, d: 5, e: 4, f: 3 } },
-      { xKey: "second", modelCosts: { g: 2, h: 1, i: 0.5, j: 0.25 } },
-      { xKey: "empty" },
+  it("ranks by the selected metric and includes overflow in Other", () => {
+    const cost = withMetric({ a: 8, b: 7, c: 6, d: 5, e: 4, f: 3, g: 2, h: 1 });
+    const points = [
+      { xKey: "first", modelStats: cost },
+      {
+        xKey: "second",
+        modelStats: withMetric(
+          { a: 8, b: 7, c: 6, d: 5, e: 4, f: 3, g: 2, h: 1, i: 9 },
+          "requests",
+        ),
+      },
     ];
-    const series = buildModelCostSeries(points);
-    expect(series.map(({ model }) => model)).toEqual([
+    expect(
+      buildModelTrendSeries(points, "cost").map(({ model }) => model),
+    ).not.toContain("i");
+    const requests = buildModelTrendSeries(points, "requests");
+    expect(requests.map(({ model }) => model)).toEqual([
+      "i",
       "a",
       "b",
       "c",
@@ -277,16 +301,12 @@ describe("buildModelCostSeries", () => {
       "e",
       "f",
       "g",
-      "h",
       null,
     ]);
-    expect(
-      points.map((point) => series[series.length - 1]?.cost(point)),
-    ).toEqual([0, 0.75, 0]);
-    for (const point of points) {
-      expect(series.reduce((total, item) => total + item.cost(point), 0)).toBe(
-        Object.values(point.modelCosts ?? {}).reduce((a, b) => a + b, 0),
-      );
-    }
+    expect(requests[8].value(points[1])).toBe(1);
+    expect(requests.reduce((sum, item) => sum + item.value(points[1]), 0)).toBe(
+      45,
+    );
+    expect(requests.every((item) => item.value(points[0]) === 0)).toBe(true);
   });
 });

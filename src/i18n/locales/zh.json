@@ -2713,12 +2713,12 @@
       "more": "多"
     },
     "trend": {
-      "costBreakdown": "成本拆分",
+      "breakdown": "趋势拆分",
       "total": "总计",
       "byModel": "按模型",
       "unknownModel": "未知模型",
       "otherModels": "其他模型",
-      "modelBreakdownError": "无法加载按模型拆分的成本",
+      "modelBreakdownError": "无法加载按模型拆分的数据",
       "title": "使用趋势 · {{range}}",
       "metricLabel": "趋势指标",
       "requests": "请求",

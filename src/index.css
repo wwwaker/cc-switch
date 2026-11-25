@@ -132,7 +132,14 @@
     --heat-4: #0e7490;
     --chart-2: #db2777;
     --chart-grid: #ececf0;
-    --chart-model-lightness: 35%;
+    --chart-model-1: #bc7b19;
+    --chart-model-2: #c44d88;
+    --chart-model-3: #3878d0;
+    --chart-model-4: #8559cd;
+    --chart-model-5: #c75d49;
+    --chart-model-6: #5c8c3d;
+    --chart-model-7: #138f80;
+    --chart-model-8: #328eac;
 
     /* 会话阅读页的 Agent 主题色：只用于提问竖条和助手 glyph，
        正文保持中性（决策 D4）。作文字用时对 --bg-app / --bg-subtle 对比度 ≥ 4.5:1 */
@@ -217,7 +224,14 @@
     --heat-4: var(--chart-usage);
     --chart-2: #f472b6;
     --chart-grid: #2c2c31;
-    --chart-model-lightness: 68%;
+    --chart-model-1: #e8ad53;
+    --chart-model-2: #e684b4;
+    --chart-model-3: #6aa6f4;
+    --chart-model-4: #ae8af0;
+    --chart-model-5: #ee917e;
+    --chart-model-6: #8fc369;
+    --chart-model-7: #4ec8b3;
+    --chart-model-8: #6cc3df;
 
     --agent-claude: #e08a6a;
     --agent-codex: #d4d4d8;

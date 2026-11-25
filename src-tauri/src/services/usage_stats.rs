@@ -113,7 +113,15 @@ pub struct DailyStats {
     pub total_cache_creation_tokens: u64,
     pub total_cache_read_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_costs: Option<BTreeMap<String, f64>>,
+    pub model_stats: Option<BTreeMap<String, TrendModelStats>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrendModelStats {
+    pub cost: f64,
+    pub requests: u64,
+    /// 新增输入 + 输出 + 缓存写入 + 缓存命中，与真实消耗 Tokens 指标口径相同。
+    pub tokens: u64,
 }
 
 #[derive(Default)]
@@ -128,21 +136,29 @@ impl TrendBucket {
         row: &rusqlite::Row<'_>,
         normalize_model: &mut impl FnMut(String) -> Result<String, AppError>,
     ) -> Result<(), AppError> {
-        self.stats.request_count += row.get::<_, i64>(1)? as u64;
+        let requests = row.get::<_, i64>(1)? as u64;
         let cost = row.get::<_, f64>(2)?;
+        let input = row.get::<_, i64>(3)? as u64;
+        let output = row.get::<_, i64>(4)? as u64;
+        let cache_creation = row.get::<_, i64>(5)? as u64;
+        let cache_read = row.get::<_, i64>(6)? as u64;
+        self.stats.request_count += requests;
         self.cost += cost;
-        self.stats.total_tokens += row.get::<_, i64>(3)? as u64;
-        self.stats.total_input_tokens += row.get::<_, i64>(4)? as u64;
-        self.stats.total_output_tokens += row.get::<_, i64>(5)? as u64;
-        self.stats.total_cache_creation_tokens += row.get::<_, i64>(6)? as u64;
-        self.stats.total_cache_read_tokens += row.get::<_, i64>(7)? as u64;
-        if let Some(model) = row.get::<_, Option<String>>(8)? {
-            *self
+        self.stats.total_tokens += input + output;
+        self.stats.total_input_tokens += input;
+        self.stats.total_output_tokens += output;
+        self.stats.total_cache_creation_tokens += cache_creation;
+        self.stats.total_cache_read_tokens += cache_read;
+        if let Some(model) = row.get::<_, Option<String>>(7)? {
+            let stats = self
                 .stats
-                .model_costs
+                .model_stats
                 .get_or_insert_default()
                 .entry(normalize_model(model)?)
-                .or_default() += cost;
+                .or_default();
+            stats.cost += cost;
+            stats.requests += requests;
+            stats.tokens += input + output + cache_creation + cache_read;
         }
         Ok(())
     }
@@ -151,7 +167,7 @@ impl TrendBucket {
         self.stats.date = date;
         self.stats.total_cost = format!("{:.6}", self.cost);
         if by_model {
-            self.stats.model_costs.get_or_insert_default();
+            self.stats.model_stats.get_or_insert_default();
         }
         self.stats
     }
@@ -1560,22 +1576,13 @@ impl Database {
 
         if duration <= 24 * 60 * 60 {
             let bucket_seconds: i64 = 60 * 60;
-            let mut bucket_count: i64 = if duration <= 0 {
-                1
-            } else {
-                (duration + bucket_seconds - 1) / bucket_seconds
-            };
-
-            if bucket_count < 1 {
-                bucket_count = 1;
-            }
+            let bucket_count = (duration + bucket_seconds - 1) / bucket_seconds;
 
             let sql = format!(
                 "SELECT
                     CAST((l.created_at - ?1) / ?3 AS INTEGER) as bucket_idx,
                     COUNT(*) as request_count,
                     COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
-                    COALESCE(SUM({fresh_input} + l.output_tokens), 0) as total_tokens,
                     COALESCE(SUM({fresh_input}), 0) as total_input_tokens,
                     COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
@@ -1628,7 +1635,6 @@ impl Database {
                 date(l.created_at, 'unixepoch', 'localtime') as bucket_date,
                 COUNT(*) as request_count,
                 COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
-                COALESCE(SUM({fresh_input} + l.output_tokens), 0) as total_tokens,
                 COALESCE(SUM({fresh_input}), 0) as total_input_tokens,
                 COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                 COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
@@ -1670,7 +1676,6 @@ impl Database {
                 r.date,
                 COALESCE(SUM(r.request_count), 0),
                 COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
-                COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
                 COALESCE(SUM({fresh_input_rollup}), 0),
                 COALESCE(SUM(r.output_tokens), 0),
                 COALESCE(SUM(r.cache_creation_tokens), 0),

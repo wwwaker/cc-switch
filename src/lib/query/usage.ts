@@ -268,8 +268,8 @@ export function useUsageTrends(
       );
     },
     enabled: options?.enabled ?? true,
-    // The trend chart only shows data for the currently selected filters.
-    placeholderData: options?.keepPreviousData ? keepPreviousData : undefined,
+    placeholderData:
+      options?.keepPreviousData === false ? undefined : keepPreviousData,
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
     refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
   });

@@ -2708,12 +2708,12 @@
       "more": "많음"
     },
     "trend": {
-      "costBreakdown": "비용 내역",
+      "breakdown": "추세 세부 내역",
       "total": "합계",
       "byModel": "모델별",
       "unknownModel": "알 수 없는 모델",
       "otherModels": "기타 모델",
-      "modelBreakdownError": "모델별 비용을 불러오지 못했습니다",
+      "modelBreakdownError": "모델별 내역을 불러오지 못했습니다",
       "title": "사용량 추이 · {{range}}",
       "metricLabel": "추세 지표",
       "requests": "요청 수",

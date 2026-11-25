@@ -89,10 +89,18 @@ export interface UsageSummaryByApp {
   summary: UsageSummary;
 }
 
+export interface TrendModelStats {
+  /** Cost in USD. */
+  cost: number;
+  requests: number;
+  /** Fresh input + output + cache write + cache read. */
+  tokens: number;
+}
+
 export interface DailyStats {
   date: string;
-  /** USD costs by effective pricing model, requested only for the model breakdown. */
-  modelCosts?: Record<string, number>;
+  /** By effective pricing model, requested only for the model breakdown. */
+  modelStats?: Record<string, TrendModelStats>;
   requestCount: number;
   totalCost: string;
   totalTokens: number;

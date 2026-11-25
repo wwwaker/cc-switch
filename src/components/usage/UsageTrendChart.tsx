@@ -22,12 +22,12 @@ import {
   resolveTrendChartType,
 } from "./format";
 import { resolveUsageRange } from "@/lib/usageRange";
-import type { UsageRangeSelection } from "@/types/usage";
+import type { DailyStats, UsageRangeSelection } from "@/types/usage";
 import { useMoneyFormat } from "@/hooks/useMoneyFormat";
 import { useSettingsQuery } from "@/lib/query";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import type { UsageMetric } from "./rememberedChoice";
-import { buildModelCostSeries } from "./modelCostSeries";
+import { buildModelTrendSeries } from "./modelTrendSeries";
 
 interface UsageTrendChartProps {
   range: UsageRangeSelection;
@@ -47,7 +47,7 @@ export interface UsageTrendStatLike {
   totalCacheCreationTokens: number;
   totalCacheReadTokens: number;
   totalCost: string | number;
-  modelCosts?: Record<string, number>;
+  modelStats?: DailyStats["modelStats"];
 }
 
 export interface UsageTrendChartPoint {
@@ -68,7 +68,7 @@ export interface UsageTrendChartPoint {
   /** 真实消耗 Tokens = 新增输入 + 输出 + 缓存写入 + 缓存命中（和指标卡同口径） */
   tokens: number;
   cost: number | null;
-  modelCosts?: Record<string, number>;
+  modelStats?: DailyStats["modelStats"];
   /** 缓存命中率（0–1）= 缓存命中 ÷（新增输入 + 缓存写入 + 缓存命中），和指标条同口径；没有输入时为 null */
   hitRate: number | null;
 }
@@ -178,7 +178,7 @@ export function buildUsageTrendChartData(
           stat.totalCacheCreationTokens +
           stat.totalCacheReadTokens,
         cost: cost ?? null,
-        modelCosts: stat.modelCosts,
+        modelStats: stat.modelStats,
         hitRate: hitRateOf(stat),
       };
     }) || []
@@ -298,9 +298,11 @@ export function UsageTrendChart({
   // 柱形图 / 曲线面积图在用量「设置」里选
   const { data: settings } = useSettingsQuery();
   const chartType = resolveTrendChartType(settings?.usageDisplay);
-  const [costView, setCostView] = useState<"total" | "model">("total");
-  const canShowModels = metric === "cost";
-  const byModel = canShowModels && costView === "model";
+  const [breakdownView, setBreakdownView] = useState<"total" | "model">(
+    "total",
+  );
+  const canShowModels = metric !== "hitRate";
+  const byModel = canShowModels && breakdownView === "model";
   const { startDate, endDate } = resolveUsageRange(range);
   const {
     data: trends,
@@ -311,6 +313,7 @@ export function UsageTrendChart({
     { appType, providerName, model },
     {
       byModel,
+      keepPreviousData: false,
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
   );
@@ -336,8 +339,8 @@ export function UsageTrendChart({
   );
 
   const modelSeries = useMemo(
-    () => (byModel ? buildModelCostSeries(chartData) : []),
-    [byModel, chartData],
+    () => (byModel ? buildModelTrendSeries(chartData, metric) : []),
+    [byModel, chartData, metric],
   );
   const modelLabel = (model: string | null) =>
     model === null
@@ -376,84 +379,57 @@ export function UsageTrendChart({
   const isBar = chartType === "bar";
   const Chart = isBar ? BarChart : AreaChart;
   const [chartBoxRef, chartWidth] = useContainerWidth();
-  // 成本先换算成显示币种再画，Y 轴才会按这个币种挑整齐的刻度。
-  const dataKey =
-    metric === "cost"
-      ? (point: UsageTrendChartPoint) =>
-          point.cost == null ? null : point.cost * rate
-      : metric;
-
-  const series = modelSeries.length
-    ? modelSeries.map(({ key, model, color, cost }) => ({
-        key,
-        name: modelLabel(model),
-        color,
-        dataKey: (point: UsageTrendChartPoint) => cost(point) * rate,
-      }))
-    : [
-        {
-          key: "total",
-          name: metricLabel,
-          color: "var(--chart-usage)",
-          dataKey,
-        },
-      ];
+  const hasBreakdown = modelSeries.length > 0;
+  const totalSeries = {
+    key: "total",
+    name: hasBreakdown ? t("usage.trend.total") : metricLabel,
+    color: hasBreakdown ? undefined : "var(--chart-usage)",
+    value: (point: UsageTrendChartPoint) => point[metric],
+  };
+  const models = modelSeries.map(({ model, ...series }) => ({
+    ...series,
+    name: modelLabel(model),
+  }));
+  const series = hasBreakdown ? models : [totalSeries];
+  // 成本按显示币种绘图，悬停仍用原始美元值交给货币格式化器。
+  const scale = metric === "cost" ? rate : 1;
 
   const renderTooltip = ({
     active,
     payload,
   }: TooltipContentProps<number, string>) => {
-    if (!active || !payload || payload.length === 0) return null;
-    const point = payload[0]?.payload as UsageTrendChartPoint | undefined;
-    const heading = point?.tooltipLabel ?? point?.label ?? "";
-    if (point && modelSeries.length > 0) {
-      const breakdown = modelSeries
-        .map(({ key, model, color, cost }) => ({
-          key,
-          model,
-          color,
-          cost: cost(point),
-        }))
-        .filter(({ cost }) => cost !== 0)
-        .sort((a, b) => b.cost - a.cost);
-      return (
-        <div className="max-w-[min(20rem,75vw)] rounded-[8px] border border-border bg-surface px-3 py-2 text-caption text-fg-1 shadow-v7-md">
-          <p className="mb-1 font-semibold">{heading}</p>
-          <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 tabular-nums">
-            <dt>{t("usage.trend.total")}</dt>
-            <dd className="text-end font-semibold">
-              {formatMetric(point.cost)}
-            </dd>
-            {breakdown.map(({ key, model, color, cost }) => (
-              <div key={key} className="contents">
-                <dt className="flex min-w-0 items-center gap-2 text-fg-2">
+    const point = payload?.[0]?.payload as UsageTrendChartPoint | undefined;
+    if (!active || !point) return null;
+    const details = models
+      .map(({ value, ...model }) => ({ ...model, value: value(point) }))
+      .filter(({ value }) => value !== 0)
+      .sort((a, b) => b.value - a.value);
+    const rows = [
+      { ...totalSeries, value: totalSeries.value(point) },
+      ...details,
+    ];
+    return (
+      <div className="max-w-[min(20rem,75vw)] rounded-[8px] border border-border bg-surface px-3 py-2 text-caption text-fg-1 shadow-v7-md">
+        <p className="mb-1 font-semibold">{point.tooltipLabel}</p>
+        <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 tabular-nums">
+          {rows.map(({ key, name, color, value }) => (
+            <div key={key} className="contents">
+              <dt className="flex min-w-0 items-center gap-2 text-fg-2">
+                {color && (
                   <span
                     aria-hidden="true"
                     className="h-2 w-2 shrink-0 rounded-[2px]"
                     style={{ backgroundColor: color }}
                   />
-                  <span className="break-all">{modelLabel(model)}</span>
-                </dt>
-                <dd className="text-end">{formatMetric(cost)}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      );
-    }
-    return (
-      <div className="rounded-[8px] border border-border bg-surface px-3 py-2 text-caption text-fg-1 shadow-v7-md">
-        <p className="mb-1 font-semibold">{heading}</p>
-        <div className="flex items-center gap-2 tabular-nums">
-          <span
-            aria-hidden="true"
-            className="h-2 w-2 rounded-[2px] bg-chart-usage"
-          />
-          <span className="text-fg-2">{metricLabel}</span>
-          <span className="ms-auto ps-3">
-            {formatMetric(point ? point[metric] : payload[0]?.value)}
-          </span>
-        </div>
+                )}
+                <span className="break-all">{name}</span>
+              </dt>
+              <dd className={color ? "text-end" : "text-end font-semibold"}>
+                {formatMetric(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
     );
   };
@@ -474,14 +450,14 @@ export function UsageTrendChart({
         </h2>
         {canShowModels && (
           <SegmentedControl
-            aria-label={t("usage.trend.costBreakdown")}
+            aria-label={t("usage.trend.breakdown")}
             size="sm"
             items={[
               { value: "total", label: t("usage.trend.total") },
               { value: "model", label: t("usage.trend.byModel") },
             ]}
-            value={costView}
-            onValueChange={setCostView}
+            value={breakdownView}
+            onValueChange={setBreakdownView}
           />
         )}
       </div>
@@ -534,22 +510,26 @@ export function UsageTrendChart({
             />
             <Tooltip
               content={renderTooltip}
-              isAnimationActive={modelSeries.length > 0 ? false : undefined}
+              isAnimationActive={hasBreakdown ? false : undefined}
               cursor={
                 isBar
                   ? { fill: "var(--bg-subtle)" }
                   : { stroke: "var(--text-3)", strokeDasharray: "3 3" }
               }
             />
-            {series.map(({ key, name, color, dataKey }) =>
-              isBar ? (
+            {series.map(({ key, name, color, value }) => {
+              const dataKey = (point: UsageTrendChartPoint) => {
+                const amount = value(point);
+                return amount == null ? null : amount * scale;
+              };
+              return isBar ? (
                 <Bar
                   key={key}
                   dataKey={dataKey}
                   name={name}
                   fill={color}
-                  stackId={modelSeries.length ? "model-cost" : undefined}
-                  radius={modelSeries.length ? undefined : [3, 3, 0, 0]}
+                  stackId={hasBreakdown ? "model-usage" : undefined}
+                  radius={hasBreakdown ? undefined : [3, 3, 0, 0]}
                   maxBarSize={36}
                   isAnimationActive={false}
                 />
@@ -563,30 +543,30 @@ export function UsageTrendChart({
                   strokeWidth={2}
                   fill={color}
                   fillOpacity={0.16}
-                  baseValue={modelSeries.length ? 0 : undefined}
+                  baseValue={hasBreakdown ? 0 : undefined}
                   dot={chartData.length === 1 ? { r: 3 } : false}
                   activeDot={{ r: 4 }}
                   isAnimationActive={false}
                 />
-              ),
-            )}
+              );
+            })}
           </Chart>
         )}
       </div>
-      {modelSeries.length > 0 && (
+      {hasBreakdown && (
         <ul className="m-0 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-1 px-0 pb-1 pt-2 text-caption text-fg-2">
-          {modelSeries.map(({ key, model, color }) => (
+          {models.map(({ key, name, color }) => (
             <li
               key={key}
               className="flex min-w-0 max-w-full items-center gap-1.5"
-              title={modelLabel(model)}
+              title={name}
             >
               <span
                 aria-hidden="true"
                 className="h-2 w-2 shrink-0 rounded-[2px]"
                 style={{ backgroundColor: color }}
               />
-              <span className="truncate">{modelLabel(model)}</span>
+              <span className="truncate">{name}</span>
             </li>
           ))}
         </ul>

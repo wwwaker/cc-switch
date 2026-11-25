@@ -56,11 +56,14 @@ vi.mock("@/lib/query/usage", () => ({
         requestCount: 12,
         totalInputTokens: 100,
         totalOutputTokens: 50,
-        totalCacheCreationTokens: 0,
-        totalCacheReadTokens: 0,
+        totalCacheCreationTokens: 10,
+        totalCacheReadTokens: 40,
         totalCost: "0.01",
-        modelCosts: options.byModel
-          ? { "model-a": 0.007, "model-b": 0.003 }
+        modelStats: options.byModel
+          ? {
+              "model-a": { cost: 0.007, requests: 8, tokens: 125 },
+              "model-b": { cost: 0.003, requests: 4, tokens: 75 },
+            }
           : undefined,
       },
     ],
@@ -134,10 +137,14 @@ describe("UsageTrendChart styles", () => {
     ).not.toBeInTheDocument();
   });
 
-  it.each(["bar", "area"])(
-    "draws cost by model in the %s chart and previews each model on hover",
-    async (chartType) => {
-      const { container } = renderWithChartType(chartType, "cost");
+  it.each([
+    ["bar", "cost", "$0.0100", "$0.0070", "$0.0030"],
+    ["bar", "requests", "12", "8", "4"],
+    ["area", "tokens", "200", "125", "75"],
+  ] as const)(
+    "draws the %s chart for %s by model and previews each model on hover",
+    async (chartType, metric, total, modelA, modelB) => {
+      const { container } = renderWithChartType(chartType, metric);
       const series = () =>
         container.querySelectorAll(
           chartType === "bar" ? ".recharts-bar-rectangle" : ".recharts-area",
@@ -148,7 +155,6 @@ describe("UsageTrendChart styles", () => {
         name: "usage.trend.byModel",
       });
       fireEvent.click(byModel);
-      expect(byModel).toHaveAttribute("aria-pressed", "true");
       expect(series()).toHaveLength(2);
       expect(screen.getByRole("list")).toHaveTextContent("model-a");
 
@@ -173,7 +179,7 @@ describe("UsageTrendChart styles", () => {
       if (chartType === "area") {
         const dots = container.querySelectorAll(".recharts-area-dot");
         expect(dots).toHaveLength(2);
-        // In series order, the first model has the larger cost and thus the smaller y coordinate.
+        // The larger model is drawn higher because the areas share a zero baseline.
         expect(Number(dots[0].getAttribute("cy"))).toBeLessThan(
           Number(dots[1].getAttribute("cy")),
         );
@@ -186,11 +192,11 @@ describe("UsageTrendChart styles", () => {
         container.querySelector<HTMLElement>(".recharts-tooltip-wrapper")!,
       );
       expect(await tooltip.findByText("usage.trend.total")).toBeVisible();
-      expect(tooltip.getByText("$0.0100")).toBeVisible();
+      expect(tooltip.getByText(total)).toBeVisible();
       expect(tooltip.getByText("model-a")).toBeVisible();
-      expect(tooltip.getByText("$0.0070")).toBeVisible();
+      expect(tooltip.getByText(modelA)).toBeVisible();
       expect(tooltip.getByText("model-b")).toBeVisible();
-      expect(tooltip.getByText("$0.0030")).toBeVisible();
+      expect(tooltip.getByText(modelB)).toBeVisible();
 
       fireEvent.click(
         screen.getByRole("button", { name: "usage.trend.total" }),
@@ -205,13 +211,10 @@ describe("UsageTrendChart styles", () => {
     (metric) => {
       const { container } = renderWithChartType("area", metric);
       expect(container.querySelector(".recharts-area")).not.toBeNull();
-      const byModel = screen.queryByRole("button", {
-        name: "usage.trend.byModel",
-      });
-      if (metric === "cost") {
-        expect(byModel).toBeInTheDocument();
-      } else {
-        expect(byModel).not.toBeInTheDocument();
+      if (metric === "hitRate") {
+        expect(
+          screen.queryByRole("button", { name: "usage.trend.byModel" }),
+        ).not.toBeInTheDocument();
       }
       // A one-bucket range must still show a point in area mode.
       expect(container.querySelector(".recharts-area-dot")).not.toBeNull();

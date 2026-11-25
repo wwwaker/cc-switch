@@ -19,7 +19,7 @@ it("loads the selected app, provider and model without showing the previous scop
     totalOutputTokens: 2,
     totalCacheCreationTokens: 0,
     totalCacheReadTokens: 0,
-    modelCosts: { "selected-model": 5 },
+    modelStats: { "selected-model": { cost: 5, requests: 1, tokens: 12 } },
   };
   let resolveFiltered: (data: DailyStats[]) => void = () => {};
   const filtered = new Promise<DailyStats[]>((resolve) => {
@@ -37,7 +37,11 @@ it("loads the selected app, provider and model without showing the previous scop
   } as const;
   const { result, rerender } = renderHook(
     (scope: UsageScopeFilters) =>
-      useUsageTrends(range, scope, { byModel: true, refetchInterval: false }),
+      useUsageTrends(range, scope, {
+        byModel: true,
+        keepPreviousData: false,
+        refetchInterval: false,
+      }),
     {
       initialProps: { appType: "all" } as UsageScopeFilters,
       wrapper: ({ children }: PropsWithChildren) => (
@@ -76,7 +80,7 @@ it("loads the selected app, provider and model without showing the previous scop
   const matching = {
     ...row,
     totalCost: "2.000000",
-    modelCosts: { "selected-model": 2 },
+    modelStats: { "selected-model": { cost: 2, requests: 1, tokens: 12 } },
   };
   resolveFiltered([matching]);
   await waitFor(() => expect(result.current.data).toEqual([matching]));

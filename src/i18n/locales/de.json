@@ -2713,12 +2713,12 @@
       "more": "Mehr"
     },
     "trend": {
-      "costBreakdown": "Kostenaufschlüsselung",
+      "breakdown": "Trendaufschlüsselung",
       "total": "Gesamt",
       "byModel": "Nach Modell",
       "unknownModel": "Unbekanntes Modell",
       "otherModels": "Andere Modelle",
-      "modelBreakdownError": "Kosten nach Modell konnten nicht geladen werden",
+      "modelBreakdownError": "Die Aufschlüsselung nach Modell konnte nicht geladen werden",
       "title": "Nutzungstrend · {{range}}",
       "metricLabel": "Trendkennzahl",
       "requests": "Anfragen",
