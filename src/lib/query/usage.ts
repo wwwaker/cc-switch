@@ -83,6 +83,7 @@ export const usageKeys = {
     customEndDate: number | undefined,
     filters?: UsageScopeFilters,
     liveEndTime?: boolean,
+    byModel = false,
   ) =>
     [
       ...usageKeys.all,
@@ -94,6 +95,7 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      byModel,
     ] as const,
   firstDate: (filters?: UsageScopeFilters) =>
     [
@@ -238,9 +240,13 @@ export function useUsageSummaryByApp(
 export function useUsageTrends(
   range: UsageRangeSelection,
   filters?: UsageScopeFilters,
-  options?: UsageQueryOptions,
+  options?: UsageQueryOptions & {
+    byModel?: boolean;
+    keepPreviousData?: boolean;
+  },
 ) {
   const effective = normalizeScopeFilters(filters);
+  const byModel = options?.byModel ?? false;
   return useQuery({
     queryKey: usageKeys.trends(
       range.preset,
@@ -248,6 +254,7 @@ export function useUsageTrends(
       range.customEndDate,
       effective,
       range.liveEndTime,
+      byModel,
     ),
     queryFn: () => {
       const { startDate, endDate } = resolveUsageRange(range);
@@ -257,10 +264,12 @@ export function useUsageTrends(
         effective.appType,
         effective.providerName,
         effective.model,
+        byModel,
       );
     },
     enabled: options?.enabled ?? true,
-    placeholderData: keepPreviousData,
+    // The trend chart only shows data for the currently selected filters.
+    placeholderData: options?.keepPreviousData ? keepPreviousData : undefined,
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
     refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
   });

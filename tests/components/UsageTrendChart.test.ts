@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildModelCostSeries } from "@/components/usage/modelCostSeries";
 import {
   buildUsageTrendChartData,
   createUsageTrendTokenTickFormatter,
@@ -245,5 +246,47 @@ describe("hitRateAxisFloor", () => {
     expect(hitRateAxisFloor([0.7])).toBe(0.55);
     expect(hitRateAxisFloor([null, null])).toBe(0);
     expect(hitRateAxisFloor([])).toBe(0);
+  });
+});
+
+describe("buildModelCostSeries", () => {
+  it("keeps each model's color across expense rank and filter changes", () => {
+    const color = (models: Record<string, number>, name: string) =>
+      buildModelCostSeries([{ xKey: "day", modelCosts: models }]).find(
+        ({ model }) => model === name,
+      )?.color;
+    const original = color({ a: 1, b: 2 }, "a");
+    expect(original).toBeDefined();
+    expect(color({ a: 3, b: 2 }, "a")).toBe(original);
+    expect(color({ a: 1 }, "a")).toBe(original);
+    expect(color({ a: 1, b: 2 }, "b")).not.toBe(original);
+  });
+
+  it("keeps eight models and preserves each bucket sum in Other", () => {
+    const points: Parameters<typeof buildModelCostSeries>[0] = [
+      { xKey: "first", modelCosts: { a: 8, b: 7, c: 6, d: 5, e: 4, f: 3 } },
+      { xKey: "second", modelCosts: { g: 2, h: 1, i: 0.5, j: 0.25 } },
+      { xKey: "empty" },
+    ];
+    const series = buildModelCostSeries(points);
+    expect(series.map(({ model }) => model)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      null,
+    ]);
+    expect(
+      points.map((point) => series[series.length - 1]?.cost(point)),
+    ).toEqual([0, 0.75, 0]);
+    for (const point of points) {
+      expect(series.reduce((total, item) => total + item.cost(point), 0)).toBe(
+        Object.values(point.modelCosts ?? {}).reduce((a, b) => a + b, 0),
+      );
+    }
   });
 });

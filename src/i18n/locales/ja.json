@@ -2713,6 +2713,12 @@
       "more": "多"
     },
     "trend": {
+      "costBreakdown": "コストの内訳",
+      "total": "合計",
+      "byModel": "モデル別",
+      "unknownModel": "不明なモデル",
+      "otherModels": "その他のモデル",
+      "modelBreakdownError": "モデル別コストを読み込めませんでした",
       "title": "使用状況の推移 · {{range}}",
       "metricLabel": "推移の指標",
       "requests": "リクエスト",

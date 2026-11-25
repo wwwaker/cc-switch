@@ -8,6 +8,7 @@ import {
   BarChart,
   CartesianGrid,
   Tooltip,
+  type TooltipContentProps,
   XAxis,
   YAxis,
 } from "recharts";
@@ -24,7 +25,9 @@ import { resolveUsageRange } from "@/lib/usageRange";
 import type { UsageRangeSelection } from "@/types/usage";
 import { useMoneyFormat } from "@/hooks/useMoneyFormat";
 import { useSettingsQuery } from "@/lib/query";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import type { UsageMetric } from "./rememberedChoice";
+import { buildModelCostSeries } from "./modelCostSeries";
 
 interface UsageTrendChartProps {
   range: UsageRangeSelection;
@@ -44,6 +47,7 @@ export interface UsageTrendStatLike {
   totalCacheCreationTokens: number;
   totalCacheReadTokens: number;
   totalCost: string | number;
+  modelCosts?: Record<string, number>;
 }
 
 export interface UsageTrendChartPoint {
@@ -64,6 +68,7 @@ export interface UsageTrendChartPoint {
   /** 真实消耗 Tokens = 新增输入 + 输出 + 缓存写入 + 缓存命中（和指标卡同口径） */
   tokens: number;
   cost: number | null;
+  modelCosts?: Record<string, number>;
   /** 缓存命中率（0–1）= 缓存命中 ÷（新增输入 + 缓存写入 + 缓存命中），和指标条同口径；没有输入时为 null */
   hitRate: number | null;
 }
@@ -173,6 +178,7 @@ export function buildUsageTrendChartData(
           stat.totalCacheCreationTokens +
           stat.totalCacheReadTokens,
         cost: cost ?? null,
+        modelCosts: stat.modelCosts,
         hitRate: hitRateOf(stat),
       };
     }) || []
@@ -292,11 +298,19 @@ export function UsageTrendChart({
   // 柱形图 / 曲线面积图在用量「设置」里选
   const { data: settings } = useSettingsQuery();
   const chartType = resolveTrendChartType(settings?.usageDisplay);
+  const [costView, setCostView] = useState<"total" | "model">("total");
+  const canShowModels = metric === "cost";
+  const byModel = canShowModels && costView === "model";
   const { startDate, endDate } = resolveUsageRange(range);
-  const { data: trends, isLoading } = useUsageTrends(
+  const {
+    data: trends,
+    isLoading,
+    isError,
+  } = useUsageTrends(
     range,
     { appType, providerName, model },
     {
+      byModel,
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
   );
@@ -320,6 +334,15 @@ export function UsageTrendChart({
       }),
     [trends, isHourly, dateLocale, startDate, endDate],
   );
+
+  const modelSeries = useMemo(
+    () => (byModel ? buildModelCostSeries(chartData) : []),
+    [byModel, chartData],
+  );
+  const modelLabel = (model: string | null) =>
+    model === null
+      ? t("usage.trend.otherModels")
+      : model || t("usage.trend.unknownModel");
 
   // 单指标：图只画指标条选中的那一个，单 Y 轴，标题和 tooltip 跟着走。
   const metricLabel = {
@@ -350,7 +373,8 @@ export function UsageTrendChart({
     [chartData],
   );
 
-  const Chart = chartType === "bar" ? BarChart : AreaChart;
+  const isBar = chartType === "bar";
+  const Chart = isBar ? BarChart : AreaChart;
   const [chartBoxRef, chartWidth] = useContainerWidth();
   // 成本先换算成显示币种再画，Y 轴才会按这个币种挑整齐的刻度。
   const dataKey =
@@ -359,10 +383,64 @@ export function UsageTrendChart({
           point.cost == null ? null : point.cost * rate
       : metric;
 
-  const renderTooltip = ({ active, payload }: any) => {
+  const series = modelSeries.length
+    ? modelSeries.map(({ key, model, color, cost }) => ({
+        key,
+        name: modelLabel(model),
+        color,
+        dataKey: (point: UsageTrendChartPoint) => cost(point) * rate,
+      }))
+    : [
+        {
+          key: "total",
+          name: metricLabel,
+          color: "var(--chart-usage)",
+          dataKey,
+        },
+      ];
+
+  const renderTooltip = ({
+    active,
+    payload,
+  }: TooltipContentProps<number, string>) => {
     if (!active || !payload || payload.length === 0) return null;
     const point = payload[0]?.payload as UsageTrendChartPoint | undefined;
     const heading = point?.tooltipLabel ?? point?.label ?? "";
+    if (point && modelSeries.length > 0) {
+      const breakdown = modelSeries
+        .map(({ key, model, color, cost }) => ({
+          key,
+          model,
+          color,
+          cost: cost(point),
+        }))
+        .filter(({ cost }) => cost !== 0)
+        .sort((a, b) => b.cost - a.cost);
+      return (
+        <div className="max-w-[min(20rem,75vw)] rounded-[8px] border border-border bg-surface px-3 py-2 text-caption text-fg-1 shadow-v7-md">
+          <p className="mb-1 font-semibold">{heading}</p>
+          <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 tabular-nums">
+            <dt>{t("usage.trend.total")}</dt>
+            <dd className="text-end font-semibold">
+              {formatMetric(point.cost)}
+            </dd>
+            {breakdown.map(({ key, model, color, cost }) => (
+              <div key={key} className="contents">
+                <dt className="flex min-w-0 items-center gap-2 text-fg-2">
+                  <span
+                    aria-hidden="true"
+                    className="h-2 w-2 shrink-0 rounded-[2px]"
+                    style={{ backgroundColor: color }}
+                  />
+                  <span className="break-all">{modelLabel(model)}</span>
+                </dt>
+                <dd className="text-end">{formatMetric(cost)}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      );
+    }
     return (
       <div className="rounded-[8px] border border-border bg-surface px-3 py-2 text-caption text-fg-1 shadow-v7-md">
         <p className="mb-1 font-semibold">{heading}</p>
@@ -382,22 +460,43 @@ export function UsageTrendChart({
 
   return (
     <section aria-labelledby="usage-trend-title" className="px-4 pb-2.5 pt-5">
-      <h2
-        id="usage-trend-title"
-        className="m-0 min-h-7 whitespace-nowrap text-caption font-semibold leading-7 text-fg-2"
-      >
-        {t("usage.trend.titleMetric", {
-          metric: metricLabel,
-          granularity: isHourly
-            ? t("usage.trend.hourly")
-            : t("usage.trend.daily"),
-        })}
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-x-3">
+        <h2
+          id="usage-trend-title"
+          className="m-0 min-h-7 whitespace-nowrap text-caption font-semibold leading-7 text-fg-2"
+        >
+          {t("usage.trend.titleMetric", {
+            metric: metricLabel,
+            granularity: isHourly
+              ? t("usage.trend.hourly")
+              : t("usage.trend.daily"),
+          })}
+        </h2>
+        {canShowModels && (
+          <SegmentedControl
+            aria-label={t("usage.trend.costBreakdown")}
+            size="sm"
+            items={[
+              { value: "total", label: t("usage.trend.total") },
+              { value: "model", label: t("usage.trend.byModel") },
+            ]}
+            value={costView}
+            onValueChange={setCostView}
+          />
+        )}
+      </div>
 
       <div ref={chartBoxRef} className="mt-1 h-[132px] w-full">
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin text-fg-3" />
+          </div>
+        ) : byModel && isError && !trends ? (
+          <div
+            role="status"
+            className="flex h-full items-center justify-center text-caption text-fg-2"
+          >
+            {t("usage.trend.modelBreakdownError")}
           </div>
         ) : (
           <Chart
@@ -435,38 +534,63 @@ export function UsageTrendChart({
             />
             <Tooltip
               content={renderTooltip}
+              isAnimationActive={modelSeries.length > 0 ? false : undefined}
               cursor={
-                chartType === "bar"
+                isBar
                   ? { fill: "var(--bg-subtle)" }
                   : { stroke: "var(--text-3)", strokeDasharray: "3 3" }
               }
             />
-            {chartType === "bar" ? (
-              <Bar
-                dataKey={dataKey}
-                name={metricLabel}
-                fill="var(--chart-usage)"
-                radius={[3, 3, 0, 0]}
-                maxBarSize={36}
-                isAnimationActive={false}
-              />
-            ) : (
-              <Area
-                type="monotone"
-                dataKey={dataKey}
-                name={metricLabel}
-                stroke="var(--chart-usage)"
-                strokeWidth={2}
-                fill="var(--chart-usage)"
-                fillOpacity={0.16}
-                dot={chartData.length === 1 ? { r: 3 } : false}
-                activeDot={{ r: 4 }}
-                isAnimationActive={false}
-              />
+            {series.map(({ key, name, color, dataKey }) =>
+              isBar ? (
+                <Bar
+                  key={key}
+                  dataKey={dataKey}
+                  name={name}
+                  fill={color}
+                  stackId={modelSeries.length ? "model-cost" : undefined}
+                  radius={modelSeries.length ? undefined : [3, 3, 0, 0]}
+                  maxBarSize={36}
+                  isAnimationActive={false}
+                />
+              ) : (
+                <Area
+                  key={key}
+                  type="monotone"
+                  dataKey={dataKey}
+                  name={name}
+                  stroke={color}
+                  strokeWidth={2}
+                  fill={color}
+                  fillOpacity={0.16}
+                  baseValue={modelSeries.length ? 0 : undefined}
+                  dot={chartData.length === 1 ? { r: 3 } : false}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+              ),
             )}
           </Chart>
         )}
       </div>
+      {modelSeries.length > 0 && (
+        <ul className="m-0 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-1 px-0 pb-1 pt-2 text-caption text-fg-2">
+          {modelSeries.map(({ key, model, color }) => (
+            <li
+              key={key}
+              className="flex min-w-0 max-w-full items-center gap-1.5"
+              title={modelLabel(model)}
+            >
+              <span
+                aria-hidden="true"
+                className="h-2 w-2 shrink-0 rounded-[2px]"
+                style={{ backgroundColor: color }}
+              />
+              <span className="truncate">{modelLabel(model)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

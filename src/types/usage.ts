@@ -91,6 +91,8 @@ export interface UsageSummaryByApp {
 
 export interface DailyStats {
   date: string;
+  /** USD costs by effective pricing model, requested only for the model breakdown. */
+  modelCosts?: Record<string, number>;
   requestCount: number;
   totalCost: string;
   totalTokens: number;

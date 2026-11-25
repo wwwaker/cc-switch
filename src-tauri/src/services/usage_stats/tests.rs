@@ -2086,7 +2086,8 @@ fn test_provider_and_model_filters_cover_detail_and_rollup() -> Result<(), AppEr
     // ⑧ 趋势（>24h 走天分桶 + rollup 分支）。
     let t_start = local_ts(2026, 6, 8, 0, 0, 0);
     let t_end = local_ts(2026, 6, 10, 23, 59, 0);
-    let trends = db.get_daily_trends(Some(t_start), Some(t_end), None, Some("Packy"), None)?;
+    let trends =
+        db.get_daily_trends(Some(t_start), Some(t_end), None, Some("Packy"), None, false)?;
     let total_req: u64 = trends.iter().map(|d| d.request_count).sum();
     assert_eq!(total_req, 7, "明细 2 + rollup 5");
 
@@ -2100,6 +2101,7 @@ fn test_provider_and_model_filters_cover_detail_and_rollup() -> Result<(), AppEr
         None,
         Some("Packy"),
         Some("claude-sonnet-4-6"),
+        false,
     )?;
     let hourly_req: u64 = hourly.iter().map(|d| d.request_count).sum();
     assert_eq!(hourly_req, 1, "仅 a-1 命中（a-2 计价模型不同）");
@@ -2117,6 +2119,117 @@ fn test_provider_and_model_filters_cover_detail_and_rollup() -> Result<(), AppEr
     assert_eq!(logs.total, 1);
     assert_eq!(logs.data[0].request_id, "a-2");
 
+    Ok(())
+}
+
+#[test]
+fn test_model_trends_intersect_app_provider_and_model_filters() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let day_start = local_ts(2026, 6, 10, 0, 0, 0);
+    let detail_ts = local_ts(2026, 6, 10, 12, 0, 0);
+    let end = local_ts(2026, 6, 10, 23, 59, 0);
+    let archive_start = local_ts(2026, 6, 8, 0, 0, 0);
+    {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "INSERT INTO providers (id, app_type, name, settings_config) VALUES
+                ('shared', 'claude', 'Target', '{}'),
+                ('shared', 'claude-desktop', 'Target', '{}'),
+                ('shared', 'codex', 'Target', '{}'),
+                ('other', 'claude', 'Other', '{}')",
+            [],
+        )?;
+        // Each distractor fails only one of the three selected filters. The
+        // request's model differs from the stored pricing model in both sources.
+        for (id, app, provider, priced_model, detail_cost, archived_cost) in [
+            ("cli", "claude", "shared", "selected-model", "2", "16"),
+            (
+                "desktop",
+                "claude-desktop",
+                "shared",
+                "selected-model",
+                "3",
+                "8",
+            ),
+            ("wrong-app", "codex", "shared", "selected-model", "32", "64"),
+            (
+                "wrong-provider",
+                "claude",
+                "other",
+                "selected-model",
+                "64",
+                "128",
+            ),
+            (
+                "wrong-model",
+                "claude",
+                "shared",
+                "different-model",
+                "128",
+                "256",
+            ),
+        ] {
+            insert_usage_log(
+                &conn,
+                id,
+                app,
+                provider,
+                "routed-alias",
+                "proxy",
+                detail_ts,
+                100,
+                10,
+                0,
+                0,
+                200,
+                detail_cost,
+            )?;
+            conn.execute(
+                "UPDATE proxy_request_logs SET pricing_model = ?1 WHERE request_id = ?2",
+                params![priced_model, id],
+            )?;
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (
+                    date, app_type, provider_id, model, pricing_model,
+                    request_count, success_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
+                ) VALUES ('2026-06-08', ?1, ?2, 'routed-alias', ?3, 1, 1, 100, 10, 0, 0, ?4, 100)",
+                params![app, provider, priced_model, archived_cost],
+            )?;
+        }
+    }
+
+    let (app, provider, model) = (Some("claude"), Some("Target"), Some("selected-model"));
+    for (start, expected_buckets, expected_cost) in [
+        (day_start, vec![5.0], "5.000000"),
+        (archive_start, vec![24.0, 5.0], "29.000000"),
+    ] {
+        let grouped = db.get_daily_trends(Some(start), Some(end), app, provider, model, true)?;
+        let total = db.get_daily_trends(Some(start), Some(end), app, provider, model, false)?;
+        let summary = db.get_usage_summary(Some(start), Some(end), app, provider, model)?;
+        assert_eq!(summary.total_cost, expected_cost);
+        assert_eq!(
+            grouped.iter().map(|day| day.request_count).sum::<u64>(),
+            summary.total_requests
+        );
+        let active_buckets: Vec<_> = grouped
+            .iter()
+            .zip(&total)
+            .filter_map(|(grouped, total)| {
+                assert_eq!(grouped.total_cost, total.total_cost);
+                assert_eq!(grouped.request_count, total.request_count);
+                let models = grouped.model_costs.as_ref().unwrap();
+                if grouped.request_count == 0 {
+                    assert!(models.is_empty());
+                    return None;
+                }
+                assert_eq!(grouped.request_count, 2);
+                assert_eq!(models.len(), 1);
+                Some(models["selected-model"])
+            })
+            .collect();
+        assert_eq!(active_buckets, expected_buckets);
+    }
     Ok(())
 }
 
@@ -2309,7 +2422,7 @@ fn test_effective_usage_dedup_prefers_proxy_for_session_sources() -> Result<(), 
     let expected_hit_rate = 60.0_f64 / 682.0_f64;
     assert!((summary.cache_hit_rate - expected_hit_rate).abs() < 1e-9);
 
-    let trends = db.get_daily_trends(Some(0), Some(40_000), None, None, None)?;
+    let trends = db.get_daily_trends(Some(0), Some(40_000), None, None, None, false)?;
     assert_eq!(trends.iter().map(|stat| stat.request_count).sum::<u64>(), 4);
 
     let provider_stats = db.get_provider_stats(None, None, None, None, None)?;
@@ -3231,10 +3344,55 @@ fn test_get_daily_trends_respects_shorter_than_24_hours() -> Result<(), AppError
         )?;
     }
 
-    let stats = db.get_daily_trends(Some(0), Some(15 * 60 * 60), Some("claude"), None, None)?;
+    let stats = db.get_daily_trends(
+        Some(0),
+        Some(15 * 60 * 60),
+        Some("claude"),
+        None,
+        None,
+        false,
+    )?;
     assert_eq!(stats.len(), 15);
     assert_eq!(stats[3].request_count, 1);
 
+    Ok(())
+}
+
+#[test]
+fn test_get_daily_trends_model_costs_include_hourly_end_boundary() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let start = local_ts(2026, 6, 10, 9, 0, 0);
+    let end = start + 7_200;
+    {
+        let conn = lock_conn!(db.conn);
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                request_id, provider_id, app_type, model, pricing_model,
+                total_cost_usd, latency_ms, status_code, created_at
+            ) VALUES
+                ('a', 'p1', 'claude', 'alias', 'model-a', '0.25', 100, 200, ?1),
+                ('b', 'p1', 'claude', 'model-b', NULL, '0.5', 100, 200, ?2),
+                ('c', 'p1', 'claude', 'alias', 'model-a', '0.125', 100, 200, ?3),
+                ('other-app', 'p1', 'codex', 'model-a', NULL, '5', 100, 200, ?2)",
+            params![start + 3_600, start + 3_601, end],
+        )?;
+    }
+
+    let read = |by_model| {
+        db.get_daily_trends(Some(start), Some(end), Some("claude"), None, None, by_model)
+    };
+    let grouped = read(true)?;
+    let total = read(false)?;
+    assert_eq!(grouped.len(), 2);
+    assert!(grouped[0].model_costs.as_ref().unwrap().is_empty());
+    assert_eq!(grouped[1].request_count, 3);
+    assert_eq!(grouped[1].total_cost, "0.875000");
+    assert_eq!(grouped[1].total_cost, total[1].total_cost);
+    assert!(total[1].model_costs.is_none());
+    assert_eq!(
+        grouped[1].model_costs.as_ref().unwrap(),
+        &BTreeMap::from([("model-a".into(), 0.375), ("model-b".into(), 0.5),])
+    );
     Ok(())
 }
 
@@ -3284,6 +3442,21 @@ fn test_get_daily_trends_groups_ranges_longer_than_24_hours_by_local_day() -> Re
                 local_ts(2024, 3, 3, 10, 0, 0)
             ],
         )?;
+        insert_usage_log(
+            &conn,
+            "day-2-detail",
+            "claude",
+            "p2",
+            "different-model",
+            "proxy",
+            local_ts(2024, 3, 2, 10, 0, 0),
+            40,
+            20,
+            0,
+            0,
+            200,
+            "0.125",
+        )?;
         conn.execute(
             "INSERT INTO usage_daily_rollups (
                     date, app_type, provider_id, model,
@@ -3307,15 +3480,22 @@ fn test_get_daily_trends_groups_ranges_longer_than_24_hours_by_local_day() -> Re
         )?;
     }
 
-    let stats = db.get_daily_trends(Some(start), Some(end), Some("claude"), None, None)?;
+    let stats = db.get_daily_trends(Some(start), Some(end), Some("claude"), None, None, false)?;
     assert_eq!(stats.len(), 3);
     assert_eq!(stats[0].request_count, 1);
     assert_eq!(stats[0].total_tokens, 150);
-    assert_eq!(stats[1].request_count, 4);
-    assert_eq!(stats[1].total_tokens, 600);
+    assert_eq!(stats[1].request_count, 5);
+    assert_eq!(stats[1].total_tokens, 660);
     assert_eq!(stats[2].request_count, 1);
     assert_eq!(stats[2].total_tokens, 275);
 
+    let grouped = db.get_daily_trends(Some(start), Some(end), Some("claude"), None, None, true)?;
+    assert_eq!(grouped[1].total_cost, stats[1].total_cost);
+    assert_eq!(grouped[1].total_cost, "0.525000");
+    assert_eq!(
+        grouped[1].model_costs.as_ref().unwrap(),
+        &BTreeMap::from([("claude-3".into(), 0.4), ("different-model".into(), 0.125),])
+    );
     Ok(())
 }
 
@@ -4906,10 +5086,30 @@ fn test_merged_reasoning_models_keep_totals_filters_and_pooled_medians() -> Resu
         Some("agy"),
         None,
         model,
+        true,
     )?;
     assert_eq!(trends.iter().map(|t| t.request_count).sum::<u64>(), 8);
-    let hourly = db.get_daily_trends(Some(ts - 3600), Some(ts + 1), Some("agy"), None, model)?;
+    assert_eq!(
+        trends[0].model_costs,
+        Some(BTreeMap::from([("gemini-4-argon".into(), 5.0)]))
+    );
+    assert_eq!(
+        trends[2].model_costs,
+        Some(BTreeMap::from([("gemini-4-argon".into(), 21.0)]))
+    );
+    let hourly = db.get_daily_trends(
+        Some(ts - 3600),
+        Some(ts + 1),
+        Some("agy"),
+        None,
+        model,
+        true,
+    )?;
     assert_eq!(hourly.iter().map(|t| t.request_count).sum::<u64>(), 6);
+    assert_eq!(
+        hourly[1].model_costs,
+        Some(BTreeMap::from([("gemini-4-argon".into(), 21.0)]))
+    );
     let logs = db.get_request_logs(
         &LogFilters {
             model: model.map(str::to_string),

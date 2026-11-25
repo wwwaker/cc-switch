@@ -1,6 +1,11 @@
 import type { ComponentProps, ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render as rtlRender, screen } from "@testing-library/react";
+import {
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   createTestQueryClient,
   renderWithQueryClient as render,
@@ -40,7 +45,11 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("@/lib/query/usage", () => ({
-  useUsageTrends: () => ({
+  useUsageTrends: (
+    _range: unknown,
+    _filters: unknown,
+    options: { byModel: boolean },
+  ) => ({
     data: [
       {
         date: "2026-09-30T00:00:00Z",
@@ -50,6 +59,9 @@ vi.mock("@/lib/query/usage", () => ({
         totalCacheCreationTokens: 0,
         totalCacheReadTokens: 0,
         totalCost: "0.01",
+        modelCosts: options.byModel
+          ? { "model-a": 0.007, "model-b": 0.003 }
+          : undefined,
       },
     ],
     isLoading: false,
@@ -122,11 +134,85 @@ describe("UsageTrendChart styles", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each(["bar", "area"])(
+    "draws cost by model in the %s chart and previews each model on hover",
+    async (chartType) => {
+      const { container } = renderWithChartType(chartType, "cost");
+      const series = () =>
+        container.querySelectorAll(
+          chartType === "bar" ? ".recharts-bar-rectangle" : ".recharts-area",
+        );
+      expect(series()).toHaveLength(1);
+
+      const byModel = screen.getByRole("button", {
+        name: "usage.trend.byModel",
+      });
+      fireEvent.click(byModel);
+      expect(byModel).toHaveAttribute("aria-pressed", "true");
+      expect(series()).toHaveLength(2);
+      expect(screen.getByRole("list")).toHaveTextContent("model-a");
+
+      const wrapper =
+        container.querySelector<HTMLDivElement>(".recharts-wrapper")!;
+      Object.defineProperties(wrapper, {
+        offsetWidth: { value: 640 },
+        offsetHeight: { value: 132 },
+      });
+      vi.spyOn(wrapper, "getBoundingClientRect").mockReturnValue({
+        width: 640,
+        height: 132,
+        left: 0,
+        top: 0,
+        x: 0,
+        y: 0,
+        bottom: 132,
+        right: 640,
+        toJSON: () => ({}),
+      });
+      const point = container.querySelector(".recharts-area-dot");
+      if (chartType === "area") {
+        const dots = container.querySelectorAll(".recharts-area-dot");
+        expect(dots).toHaveLength(2);
+        // In series order, the first model has the larger cost and thus the smaller y coordinate.
+        expect(Number(dots[0].getAttribute("cy"))).toBeLessThan(
+          Number(dots[1].getAttribute("cy")),
+        );
+      }
+      fireEvent.mouseMove(wrapper, {
+        clientX: point ? Number(point.getAttribute("cx")) : 330,
+        clientY: 70,
+      });
+      const tooltip = within(
+        container.querySelector<HTMLElement>(".recharts-tooltip-wrapper")!,
+      );
+      expect(await tooltip.findByText("usage.trend.total")).toBeVisible();
+      expect(tooltip.getByText("$0.0100")).toBeVisible();
+      expect(tooltip.getByText("model-a")).toBeVisible();
+      expect(tooltip.getByText("$0.0070")).toBeVisible();
+      expect(tooltip.getByText("model-b")).toBeVisible();
+      expect(tooltip.getByText("$0.0030")).toBeVisible();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "usage.trend.total" }),
+      );
+      expect(series()).toHaveLength(1);
+      expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    },
+  );
+
   it.each(["tokens", "requests", "cost", "hitRate"] as const)(
     "draws the saved area style for the %s metric",
     (metric) => {
       const { container } = renderWithChartType("area", metric);
       expect(container.querySelector(".recharts-area")).not.toBeNull();
+      const byModel = screen.queryByRole("button", {
+        name: "usage.trend.byModel",
+      });
+      if (metric === "cost") {
+        expect(byModel).toBeInTheDocument();
+      } else {
+        expect(byModel).not.toBeInTheDocument();
+      }
       // A one-bucket range must still show a point in area mode.
       expect(container.querySelector(".recharts-area-dot")).not.toBeNull();
       expect(container.querySelector(".recharts-bar-rectangle")).toBeNull();

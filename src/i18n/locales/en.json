@@ -2713,6 +2713,12 @@
       "more": "More"
     },
     "trend": {
+      "costBreakdown": "Cost breakdown",
+      "total": "Total",
+      "byModel": "By model",
+      "unknownModel": "Unknown model",
+      "otherModels": "Other models",
+      "modelBreakdownError": "Could not load cost by model",
       "title": "Usage trend · {{range}}",
       "metricLabel": "Trend metric",
       "requests": "Requests",

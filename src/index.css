@@ -132,6 +132,7 @@
     --heat-4: #0e7490;
     --chart-2: #db2777;
     --chart-grid: #ececf0;
+    --chart-model-lightness: 35%;
 
     /* 会话阅读页的 Agent 主题色：只用于提问竖条和助手 glyph，
        正文保持中性（决策 D4）。作文字用时对 --bg-app / --bg-subtle 对比度 ≥ 4.5:1 */
@@ -216,6 +217,7 @@
     --heat-4: var(--chart-usage);
     --chart-2: #f472b6;
     --chart-grid: #2c2c31;
+    --chart-model-lightness: 68%;
 
     --agent-claude: #e08a6a;
     --agent-codex: #d4d4d8;

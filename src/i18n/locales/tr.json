@@ -2642,6 +2642,12 @@
       "more": "Diğer"
     },
     "trend": {
+      "costBreakdown": "Maliyet dökümü",
+      "total": "Toplam",
+      "byModel": "Modele göre",
+      "unknownModel": "Bilinmeyen model",
+      "otherModels": "Diğer modeller",
+      "modelBreakdownError": "Model bazında maliyet yüklenemedi",
       "title": "Kullanım eğilimi · {{range}}",
       "metricLabel": "Trend metriği",
       "requests": "İstekler",

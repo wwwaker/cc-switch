@@ -192,6 +192,7 @@ function useAllSpansDailyTrends(
   const trendsQuery = useUsageTrends(selection, filters, {
     enabled: spanCount != null,
     refetchInterval,
+    keepPreviousData: true,
   });
   return {
     spanCount: spanCount ?? 1,
